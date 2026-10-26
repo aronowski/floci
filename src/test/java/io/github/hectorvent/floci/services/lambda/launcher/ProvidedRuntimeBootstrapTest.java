@@ -1,15 +1,14 @@
 package io.github.hectorvent.floci.services.lambda.launcher;
 
+import io.github.hectorvent.floci.testing.ShortProcesses;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -43,7 +42,7 @@ class ProvidedRuntimeBootstrapTest {
         Path payload = Files.createDirectories(task.resolve(".payload"));
         executable(payload.resolve("worker"), "#!/bin/sh\nprintf 'package:%s' \"$1\"\n");
         script(layer, "#!/bin/sh\nexit 93\n");
-        Result result = run("two words");
+        ShortProcesses.Ended result = run("two words");
         assertEquals(0, result.exit());
         assertEquals("package:two words", result.output());
     }
@@ -52,7 +51,7 @@ class ProvidedRuntimeBootstrapTest {
     void layerScriptKeepsItsCompanionPathWhenPackageHasNoBootstrap() throws Exception {
         script(layer, "#!/bin/sh\ncat \"${0%/*}/value\"\n");
         Files.writeString(layer.resolve("value"), "layer");
-        Result result = run();
+        ShortProcesses.Ended result = run();
         assertEquals(0, result.exit());
         assertEquals("layer", result.output());
     }
@@ -61,14 +60,14 @@ class ProvidedRuntimeBootstrapTest {
     void executableBinaryRetainsArguments() throws Exception {
         // Not /bin/echo: on Ubuntu 26.04 it is a multicall binary that refuses to run as "bootstrap".
         Files.createSymbolicLink(task.resolve("bootstrap"), Path.of("/bin/sh"));
-        Result result = run("-c", "printf '%s|' \"$@\"", "sh", "binary", "two words");
+        ShortProcesses.Ended result = run("-c", "printf '%s|' \"$@\"", "sh", "binary", "two words");
         assertEquals(0, result.exit());
         assertEquals("binary|two words|", result.output());
     }
 
     @Test
     void missingBootstrapRefuses() throws Exception {
-        Result result = run();
+        ShortProcesses.Ended result = run();
         assertEquals(127, result.exit());
         assertEquals("no bootstrap found at " + task + "/bootstrap or "
                 + layer + "/bootstrap\n", result.output());
@@ -78,7 +77,7 @@ class ProvidedRuntimeBootstrapTest {
     void nonExecutablePackageDoesNotFallBackToLayer() throws Exception {
         Files.writeString(task.resolve("bootstrap"), "#!/bin/sh\nexit 0\n");
         script(layer, "#!/bin/sh\nprintf unexpected-fallback\n");
-        Result result = run();
+        ShortProcesses.Ended result = run();
         assertTrue(result.exit() != 0);
         assertFalse(result.output().contains("unexpected-fallback"));
     }
@@ -92,22 +91,9 @@ class ProvidedRuntimeBootstrapTest {
         assertTrue(path.toFile().setExecutable(true));
     }
 
-    private Result run(String... arguments) throws Exception {
+    private ShortProcesses.Ended run(String... arguments) throws Exception {
         List<String> command = new ArrayList<>(List.of("/bin/sh", entrypoint.toString()));
         command.addAll(List.of(arguments));
-        Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
-        try {
-            assertTrue(process.waitFor(5, TimeUnit.SECONDS), "bootstrap must terminate");
-            return new Result(process.exitValue(),
-                    new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8));
-        } finally {
-            if (process.isAlive()) {
-                process.destroyForcibly();
-                assertTrue(process.waitFor(5, TimeUnit.SECONDS), "test process must be reaped");
-            }
-        }
-    }
-
-    private record Result(int exit, String output) {
+        return ShortProcesses.run(new ProcessBuilder(command));
     }
 }
