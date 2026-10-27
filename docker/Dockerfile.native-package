@@ -1,4 +1,8 @@
-FROM registry.access.redhat.com/ubi9-micro:9.8
+# Runtime base - ubi9-micro's glibc requires x86-64-v2. Override with an x86-64
+# baseline base such as registry.access.redhat.com/ubi8-micro:8.10 to run on a
+# pre-SSE4.2 CPU.
+ARG RUNTIME_BASE=registry.access.redhat.com/ubi9-micro:9.8
+FROM ${RUNTIME_BASE}
 
 # Automatically set by Docker BuildKit to "amd64" or "arm64"
 ARG TARGETARCH

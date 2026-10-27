@@ -111,6 +111,29 @@ If the standard ARM64 image exits with `CPU features [FP, ASIMD, CRC32, LSE] not
 
 The same build is published as the standalone binary `floci-aws-linux-arm64-baseline`; see [Native binary](../getting-started/installation.md#native-binary).
 
+## Older x86_64 CPUs
+
+The published amd64 image is compiled for the `x86-64-v2` architecture and uses
+`ubi9-micro`, which glibc also requires `x86-64-v2`, so it supports at minimum
+`x86-64-v2` hosts (which lack the AVX2, BMI2 and FMA of newer `x86-64-v3`
+chips) and everything above. However, a CPU below `x86-64-v2` (no SSE4.2) won't
+be officially supported, and there will be no official `x86_64-v1`-compatible
+images published.
+
+For such a CPU, build an image yourself with the Makefile's `X86_64_V1=1`
+option. Without using it, the native build will match the official supported
+config (ubi9, `x86-64-v2`). With it, it compiles for [Quarkus' `compatibility`
+preset](https://quarkus.io/guides/native-reference/#work-around-missing-cpu-features)
+and builds (and runs) on the UBI8 toolchain.
+
+```bash
+make native X86_64_V1=1
+make native-image X86_64_V1=1
+```
+
+The result runs on a real `x86-64-v1` CPU. This is the x86_64 equivalent of the
+`-march=armv8-a` `-baseline` ARM64 image above.
+
 ## Reusable Image Publishing
 
 The `Build Floci Images` reusable workflow publishes a JVM image for an exact

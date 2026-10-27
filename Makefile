@@ -45,9 +45,23 @@ PYTHON ?= python3
 # range (BranchTargetOutOfBoundsException). The flag exists only on Mandrel, so it lives here
 # and in the workflows rather than in application.yml.
 ARCH := $(shell uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
+# X86_64_V1=1 opts into a pre-SSE4.2 (x86-64-v1) build. When unset, the native
+# targets build as the official supported config on the ubi9 toolchain,
+# requiring x86-64-v2. When set, the UBI8 builder and ubi8-micro runtime (glibc
+# at the x86-64-v1 baseline) are used, so neither the code nor the loaded glibc
+# needs x86-64-v2 and runs on older CPUs.
+ifeq ($(X86_64_V1),1)
+# ubi8 builder, without the "8" in its name
+NATIVE_BUILDER ?= quay.io/quarkus/ubi-quarkus-mandrel-builder-image:jdk-25
+RUNTIME_BASE ?= registry.access.redhat.com/ubi8-micro:8.10
+MARCH ?= compatibility
+endif
 NATIVE_BUILDER ?= quay.io/quarkus/ubi9-quarkus-mandrel-builder-image:jdk-25
 NATIVE_ARGS ?= -Ob,-H:-AOTSingleCallsiteInline
 NATIVE_IMAGE ?= floci:local-native
+RUNTIME_BASE ?= registry.access.redhat.com/ubi9-micro:9.8
+MARCH ?=
+MARCH_ARG = $(if $(MARCH),$(comma)-march=$(MARCH),)
 COMPOSE_NATIVE := docker compose -f docker-compose.yml -f docker/compose.native.yml
 SUITES ?= sdk-test-java
 
@@ -89,11 +103,11 @@ build: ## Build the JVM package without running tests
 test: ## Run the test suite; T=Class or T=Class#method narrows it (make test T=SsmIntegrationTest)
 	./mvnw test $(if $(T),-Dtest='$(T)' -Dsurefire.failIfNoSpecifiedTests=false,)
 
-native: ## Build the native binary with CI's flags and stage it in native/$(ARCH)/ (about 4 min)
+native: ## Build the native binary with CI's flags and stage it in native/$(ARCH)/ (about 4 min, X86_64_V1=1 for pre-SSE4.2 CPUs)
 	./mvnw clean package -Dnative -DskipTests -B \
 		-Dquarkus.native.container-build=true \
 		-Dquarkus.native.builder-image=$(NATIVE_BUILDER) \
-		-Dquarkus.native.additional-build-args-append="$(NATIVE_ARGS)"
+		-Dquarkus.native.additional-build-args-append="$(NATIVE_ARGS)$(MARCH_ARG)"
 	mkdir -p native/$(ARCH)
 	cp target/*-runner native/$(ARCH)/application
 # The builder image has no zlib-static, so a container-built binary links zlib dynamically and
@@ -101,11 +115,11 @@ native: ## Build the native binary with CI's flags and stage it in native/$(ARCH
 # LD_LIBRARY_PATH finds it. CI builds with a host Mandrel that links zlib statically.
 	docker run --rm --entrypoint cat $(NATIVE_BUILDER) /usr/lib64/libz.so.1 > native/$(ARCH)/libz.so.1
 
-native-host: ## Build a native binary for this machine with the installed GraalVM or Mandrel, no Docker: target/floci-<version>-runner
+native-host: ## Build a native binary for this machine with the installed GraalVM or Mandrel, no Docker: target/floci-<version>-runner (MARCH=<arch> or X86_64_V1=1 for older CPUs)
 	@test -n "$(NATIVE_IMAGE_BIN)" || { echo "native-image not found: install GraalVM or Mandrel (for example 'sdk install java 25.0.3-graal') or set GRAALVM_HOME"; exit 1; }
-	@echo "native-image: $(NATIVE_IMAGE_BIN) (flags $(NATIVE_HOST_FLAGS))"
+	@echo "native-image: $(NATIVE_IMAGE_BIN) (flags $(NATIVE_HOST_FLAGS)$(MARCH_ARG))"
 	./mvnw clean package -Dnative -DskipTests -B \
-		-Dquarkus.native.additional-build-args-append="$(NATIVE_HOST_FLAGS)"
+		-Dquarkus.native.additional-build-args-append="$(NATIVE_HOST_FLAGS)$(MARCH_ARG)"
 	@echo "built $(NATIVE_BIN) for $$(uname -sm)"
 
 run-native: ## Run the host binary from native-host on port 4566, state under ./data
@@ -119,9 +133,9 @@ native-install: ## Copy the host binary to $(PREFIX)/bin/floci-aws (PREFIX defau
 	cp "$(NATIVE_BIN)" $(PREFIX)/bin/floci-aws
 	@echo "installed $(PREFIX)/bin/floci-aws"
 
-native-image: ## Package native/$(ARCH)/ as $(NATIVE_IMAGE) with docker/Dockerfile.native-package
+native-image: ## Package native/$(ARCH)/ as $(NATIVE_IMAGE) (X86_64_V1=1 for pre-SSE4.2 CPUs)
 	@test -f native/$(ARCH)/application || { echo "native/$(ARCH)/application is missing: run 'make native' first"; exit 1; }
-	docker build -f docker/Dockerfile.native-package --build-arg VERSION=local -t $(NATIVE_IMAGE) .
+	docker build -f docker/Dockerfile.native-package --build-arg VERSION=local --build-arg RUNTIME_BASE=$(RUNTIME_BASE) -t $(NATIVE_IMAGE) .
 
 native-up: ## Start $(NATIVE_IMAGE) with docker compose (docker/compose.native.yml overlay) and wait for health
 	$(COMPOSE_NATIVE) up -d --no-build
